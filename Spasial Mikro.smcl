@@ -1,0 +1,992 @@
+{smcl}
+{com}{sf}{ul off}{txt}{.-}
+      name:  {res}<unnamed>
+       {txt}log:  {res}E:\Stata_Mikro\Publish\Persamaan Simultan\Spasial Mikro.smcl
+  {txt}log type:  {res}smcl
+ {txt}opened on:  {res}24 Nov 2026, 22:25:42
+
+{com}. do "C:\Users\user\AppData\Local\Temp\STD5d0_000000.tmp"
+{txt}
+{com}. ********************************************************************************
+. * PROJECT : SIMULASI DATA MIKRO-MAKRO & SISTEM PERSAMAAN SIMULTAN (SEM)
+. *           Eksperimen Monte Carlo Data Sintetis Individu ke Agregat Kab/Kota
+. * METODE  : Weighted Collapse, 2SLS, 3SLS, IV-GMM, SUR, Quantile, & Survey-IV
+. * AUTHOR  : Qorinul Huda
+. ********************************************************************************
+. 
+. clear all
+{res}{txt}
+{com}. set more off
+{txt}
+{com}. set seed 20261124
+{txt}
+{com}. 
+. ** =============================================================================
+. ** TAHAP 1: PEMBANGKITAN DATASET MIKRO BESAR (N = 50.000 INDIVIDU, 100 KAB/KOTA)
+. ** =============================================================================
+.         * 1. Membuat kerangka 100 Kabupaten/Kota sintetis dengan variabel makro & instrumen
+.         set obs 100
+{txt}{p}
+Number of observations ({bf:_N}) was 0,
+now 100.
+{p_end}
+
+{com}.         gen int id_kab = 1100 + _n
+{txt}
+{com}.         gen byte pulau = ceil(_n / 20)
+{txt}
+{com}.         la def pulau 1 "Wilayah 1" 2 "Wilayah 2" 3 "Wilayah 3" 4 "Wilayah 4" 5 "Wilayah 5"
+{txt}
+{com}.         la val pulau pulau
+{txt}
+{com}.         
+.         * Variabel Eksogen & Instrumen Tingkat Kabupaten/Kota:
+.         * - infra_kab : Indeks Infrastruktur Daerah (instrumen sisi penawaran/upah)
+.         * - rasio_sek : Rasio Ketersediaan Sekolah Daerah (instrumen pendidikan/konsumsi)
+.         * - umk_riil  : Upah Minimum Kabupaten/Kota Riil (instrumen kebijakan upah)
+.         gen double infra_kab    = rnormal(50, 15) + 5*(pulau==2)
+{txt}
+{com}.         gen double rasio_sek    = rnormal(65, 12) + 4*(pulau==2)
+{txt}
+{com}.         gen double umk_riil     = 2.2 + 0.02*infra_kab + rnormal(0, 0.3)
+{txt}
+{com}.         
+.         * Heterogenitas tak teramati (unobserved heterogeneity) tingkat kabupaten/kota
+.         gen double u_kab_earn   = rnormal(0, 0.25)
+{txt}
+{com}.         gen double u_kab_educ   = rnormal(0, 0.40)
+{txt}
+{com}.         
+.         * 2. Ekspansi menjadi 500 observasi individu per kabupaten/kota (Total N = 50.000)
+.         expand 500
+{txt}(49,900 observations created)
+
+{com}.         bysort id_kab: gen long id_ind = _n
+{txt}
+{com}.         order id_kab id_ind pulau
+{txt}
+{com}.         
+.         * Penimbang survei (final_weight): merepresentasikan jumlah populasi per responden
+.         gen double final_weight = runiform(80, 450)
+{txt}
+{com}.         
+.         * Karakteristik Demografi Individu
+.         gen byte female   = (runiform() < 0.49)
+{txt}
+{com}.         gen int age       = floor(runiform(18, 65))
+{txt}
+{com}.         gen double exp    = max(0, age - 15)
+{txt}
+{com}.         gen double exp_sq = exp^2
+{txt}
+{com}.         
+.         * Kemampuan bawaan tak teramati (unobserved ability) yang memicu bias endogenitas
+.         * karena berkorelasi dengan lama sekolah (educ_yr) sekaligus upah (ln_wage)
+.         gen double ability = rnormal(0, 1)
+{txt}
+{com}.         
+.         * 3. Data Generating Process (DGP) Level Individu
+.         * Lama sekolah individu dipengaruhi instrumen daerah (rasio_sek), demografi, & ability
+.         gen double educ_yr = 7.5 + 0.06*rasio_sek - 0.35*female - 0.03*(age-35) + 1.2*ability + u_kab_educ + rnormal(0, 1.8)
+{txt}
+{com}.         replace educ_yr = round(max(0, min(20, educ_yr)), 1)
+{txt}(50,000 real changes made)
+
+{com}.         
+.         * Log Upah Individu (Mincer Earnings Function + Infrastruktur Daerah + Ability)
+.         gen double ln_wage = 0.45 + 0.085*educ_yr + 0.032*exp - 0.0005*exp_sq - 0.18*female + 0.012*infra_kab + 0.25*ability + u_kab_earn + rnormal(0, 0.35)
+{txt}
+{com}.         
+.         * Status Pekerja Formal (Variabel Biner 0/1 untuk model non-linear Probit/Logit)
+.         gen double latent_formal = -2.2 + 0.18*educ_yr + 0.015*infra_kab - 0.25*female + 0.30*ability + rnormal(0, 1)
+{txt}
+{com}.         gen byte formal = (latent_formal > 0)
+{txt}
+{com}.         
+.         * Log Pengeluaran Konsumsi Per Kapita Individu
+.         gen double ln_cons = 0.30 + 0.72*ln_wage + 0.015*educ_yr - 0.004*age + rnormal(0, 0.22)
+{txt}
+{com}.         
+.         * Hapus variabel laten tak teramati agar menyerupai struktur data survei
+.         drop latent_formal ability u_kab_earn u_kab_educ
+{txt}
+{com}.         
+.         * Pelabelan Variabel Dataset Mikro Sintetis
+.         la var id_kab       "Kode Kabupaten/Kota (Sintetis)"
+{txt}
+{com}.         la var id_ind       "ID Unik Individu"
+{txt}
+{com}.         la var final_weight "Penimbang Survei (Survey Weight)"
+{txt}
+{com}.         la var female       "Perempuan (1=Ya, 0=Tidak)"
+{txt}
+{com}.         la var age          "Usia Individu (Tahun)"
+{txt}
+{com}.         la var educ_yr      "Lama Sekolah Individu (Tahun)"
+{txt}
+{com}.         la var ln_wage      "Log Pendapatan/Upah Bulanan"
+{txt}
+{com}.         la var ln_cons      "Log Konsumsi Per Kapita"
+{txt}
+{com}.         la var formal       "Status Pekerja Formal (1=Formal, 0=Informal)"
+{txt}
+{com}.         la var infra_kab    "Indeks Infrastruktur Kabupaten/Kota (Instrumen Z1)"
+{txt}
+{com}.         la var rasio_sek    "Rasio Ketersediaan Sekolah Daerah (Instrumen Z2)"
+{txt}
+{com}.         la var umk_riil     "Upah Minimum Kabupaten Riil (Instrumen Z3)"
+{txt}
+{com}.         
+.         compress
+  {txt}variable {bf}{res}id_ind{sf}{txt} was {bf}{res}long{sf}{txt} now {bf}{res}int{sf}
+  {txt}variable {bf}{res}age{sf}{txt} was {bf}{res}int{sf}{txt} now {bf}{res}byte{sf}
+  {txt}variable {bf}{res}exp{sf}{txt} was {bf}{res}double{sf}{txt} now {bf}{res}byte{sf}
+  {txt}variable {bf}{res}exp_sq{sf}{txt} was {bf}{res}double{sf}{txt} now {bf}{res}int{sf}
+  {txt}variable {bf}{res}educ_yr{sf}{txt} was {bf}{res}double{sf}{txt} now {bf}{res}byte{sf}
+{txt}  (1,150,000 bytes saved)
+
+{com}.         save "data_mikro_simulasi_50k.dta", replace
+{txt}{p 0 4 2}
+file {bf}
+data_mikro_simulasi_50k.dta{rm}
+saved
+{p_end}
+
+{com}.         describe
+
+{txt}Contains data from {res}data_mikro_simulasi_50k.dta
+{txt} Observations:{res}        50,000                  
+{txt}    Variables:{res}            15                  24 Nov 2026 22:25
+{txt}{hline}
+Variable      Storage   Display    Value
+    name         type    format    label      Variable label
+{hline}
+{p 0 48}{res}{bind:id_kab         }{txt}{bind: int     }{bind:{txt}%8.0g     }{space 1}{bind:         }{bind:  }{res}{res}Kode Kabupaten/Kota (Sintetis){p_end}
+{p 0 48}{bind:id_ind         }{txt}{bind: int     }{bind:{txt}%12.0g    }{space 1}{bind:         }{bind:  }{res}{res}ID Unik Individu{p_end}
+{p 0 48}{bind:pulau          }{txt}{bind: byte    }{bind:{txt}%9.0g     }{space 1}{bind:pulau    }{bind:  }{res}{res}{p_end}
+{p 0 48}{bind:infra_kab      }{txt}{bind: double  }{bind:{txt}%10.0g    }{space 1}{bind:         }{bind:  }{res}{res}Indeks Infrastruktur Kabupaten/Kota (Instrumen Z1){p_end}
+{p 0 48}{bind:rasio_sek      }{txt}{bind: double  }{bind:{txt}%10.0g    }{space 1}{bind:         }{bind:  }{res}{res}Rasio Ketersediaan Sekolah Daerah (Instrumen Z2){p_end}
+{p 0 48}{bind:umk_riil       }{txt}{bind: double  }{bind:{txt}%10.0g    }{space 1}{bind:         }{bind:  }{res}{res}Upah Minimum Kabupaten Riil (Instrumen Z3){p_end}
+{p 0 48}{bind:final_weight   }{txt}{bind: double  }{bind:{txt}%10.0g    }{space 1}{bind:         }{bind:  }{res}{res}Penimbang Survei (Survey Weight){p_end}
+{p 0 48}{bind:female         }{txt}{bind: byte    }{bind:{txt}%8.0g     }{space 1}{bind:         }{bind:  }{res}{res}Perempuan (1=Ya, 0=Tidak){p_end}
+{p 0 48}{bind:age            }{txt}{bind: byte    }{bind:{txt}%8.0g     }{space 1}{bind:         }{bind:  }{res}{res}Usia Individu (Tahun){p_end}
+{p 0 48}{bind:exp            }{txt}{bind: byte    }{bind:{txt}%10.0g    }{space 1}{bind:         }{bind:  }{res}{res}{p_end}
+{p 0 48}{bind:exp_sq         }{txt}{bind: int     }{bind:{txt}%10.0g    }{space 1}{bind:         }{bind:  }{res}{res}{p_end}
+{p 0 48}{bind:educ_yr        }{txt}{bind: byte    }{bind:{txt}%10.0g    }{space 1}{bind:         }{bind:  }{res}{res}Lama Sekolah Individu (Tahun){p_end}
+{p 0 48}{bind:ln_wage        }{txt}{bind: double  }{bind:{txt}%10.0g    }{space 1}{bind:         }{bind:  }{res}{res}Log Pendapatan/Upah Bulanan{p_end}
+{p 0 48}{bind:formal         }{txt}{bind: byte    }{bind:{txt}%8.0g     }{space 1}{bind:         }{bind:  }{res}{res}Status Pekerja Formal (1=Formal, 0=Informal){p_end}
+{p 0 48}{bind:ln_cons        }{txt}{bind: double  }{bind:{txt}%10.0g    }{space 1}{bind:         }{bind:  }{res}{res}Log Konsumsi Per Kapita{p_end}
+{txt}{hline}
+Sorted by: {res}id_kab
+{txt}
+{com}. 
+. 
+. ** =============================================================================
+. ** TAHAP 2: AGREGASI TINGKAT KABUPATEN/KOTA (WEIGHTED COLLAPSE & INFERENSI)
+. ** =============================================================================
+.         use "data_mikro_simulasi_50k.dta", clear
+{txt}
+{com}.         
+.         * CATATAN METODOLOGIS (WEIGHTED AGGREGATION):
+.         * Untuk menghasilkan indikator makro kabupaten/kota yang representatif terhadap
+.         * populasi, proses collapse menggunakan penimbang survei [aw = final_weight].
+.         * Total penimbang (est_populasi) disimpan sebagai bobot inferensi pada tahap makro.
+.         
+.         preserve
+{txt}
+{com}.                 collapse (count) n_sampel = id_ind (sum) est_populasi = final_weight, by(id_kab)
+{res}{txt}
+{com}.                 tempfile pop_kab
+{txt}
+{com}.                 save `pop_kab'
+{txt}{p 0 4 2}
+file {bf}
+C:\Users\user\AppData\Local\Temp\ST_5d0_000002.tmp{rm}
+saved
+as .dta format
+{p_end}
+
+{com}.         restore
+{txt}
+{com}.         
+.         collapse (mean) avg_wage = ln_wage avg_cons = ln_cons rls_kab = educ_yr share_formal = formal share_female = female avg_age = age (first) pulau infra_kab rasio_sek umk_riil [aw = final_weight], by(id_kab)
+{res}{txt}
+{com}.                          
+.         merge 1:1 id_kab using `pop_kab', nogen
+{res}
+{txt}{col 5}Result{col 33}Number of obs
+{col 5}{hline 41}
+{col 5}Not matched{col 30}{res}               0
+{txt}{col 5}Matched{col 30}{res}             100{txt}  
+{col 5}{hline 41}
+
+{com}.         
+.         * Simulasi Umpan Balik Simultan (Two-Way Causality / Simultaneity Feedback):
+.         * Di tingkat regional, kenaikan konsumsi agregat (avg_cons) mendorong permintaan
+.         * lokal & menaikkan upah (avg_wage), sementara kenaikan upah (avg_wage) meningkatkan
+.         * daya beli dan konsumsi (avg_cons). Ini menciptakan bias simultanitas pada OLS.
+.         gen double shock_macro = rnormal(0, 0.08)
+{txt}
+{com}.         replace avg_wage = avg_wage + 0.35*avg_cons + shock_macro
+{txt}(100 real changes made)
+
+{com}.         replace avg_cons = avg_cons + 0.45*avg_wage - 0.5*shock_macro
+{txt}(100 real changes made)
+
+{com}.         
+.         * Konversi proporsi ke satuan persentase (0 - 100%)
+.         replace share_formal = share_formal * 100
+{txt}(100 real changes made)
+
+{com}.         replace share_female = share_female * 100
+{txt}(100 real changes made)
+
+{com}.         
+.         la var est_populasi "Estimasi Total Populasi Kab/Kota (Bobot Inferensi Makro)"
+{txt}
+{com}.         la var avg_wage     "Rata-rata Log Upah Kab/Kota (Endogen Y1)"
+{txt}
+{com}.         la var avg_cons     "Rata-rata Log Konsumsi Kab/Kota (Endogen Y2)"
+{txt}
+{com}.         la var rls_kab      "Rata-rata Lama Sekolah Kab/Kota (Tahun)"
+{txt}
+{com}.         la var share_formal "Pangsa Pekerja Formal Kab/Kota (%)"
+{txt}
+{com}.         la var infra_kab    "Indeks Infrastruktur Kab/Kota (Instrumen Z1)"
+{txt}
+{com}.         la var rasio_sek    "Rasio Ketersediaan Sekolah Kab/Kota (Instrumen Z2)"
+{txt}
+{com}.         la var umk_riil     "UMK Riil Kab/Kota (Instrumen Z3)"
+{txt}
+{com}.         
+.         order id_kab pulau n_sampel est_populasi avg_wage avg_cons rls_kab share_formal infra_kab rasio_sek umk_riil
+{txt}
+{com}.         save "data_agregat_simulasi_kabkota.dta", replace
+{txt}{p 0 4 2}
+file {bf}
+data_agregat_simulasi_kabkota.dta{rm}
+saved
+{p_end}
+
+{com}.         
+.         * Statistik deskriptif tertimbang populasi antar-kabupaten/kota
+.         summarize avg_wage avg_cons rls_kab share_formal infra_kab rasio_sek umk_riil [aw = est_populasi]
+
+{txt}    Variable {c |}     Obs      Weight        Mean   Std. dev.       Min        Max
+{hline 13}{c +}{hline 65}
+{space 4}avg_wage {c |}{res}     100    13267425    2.993741   .3660032   2.096448   4.029565
+{txt}{space 4}avg_cons {c |}{res}     100    13267425    3.302566   .3701295   2.381965   4.316325
+{txt}{space 5}rls_kab {c |}{res}     100    13267425    11.02609   .7802313   9.329751   12.95776
+{txt}share_formal {c |}{res}     100    13267425    64.47402   7.295482   35.70919   82.47984
+{txt}{space 3}infra_kab {c |}{res}     100    13267425    52.34389   12.16511   4.261111   84.68916
+{txt}{hline 13}{c +}{hline 65}
+{space 3}rasio_sek {c |}{res}     100    13267425    63.55887   11.02682   31.20447    91.7372
+{txt}{space 4}umk_riil {c |}{res}     100    13267425    3.259846   .3660003   2.372361   4.169592
+{txt}
+{com}. 
+. 
+. ** =============================================================================
+. ** TAHAP 3: SISTEM PERSAMAAN SIMULTAN DENGAN INFERENSI TERTIMBANG
+. ** =============================================================================
+.         use "data_agregat_simulasi_kabkota.dta", clear
+{txt}
+{com}. 
+.         /* -------------------------------------------------------------------------
+>            SPESIFIKASI STRUKTURAL & INFERENSI TERTIMBANG POPULASI:
+>            - Persamaan 1 (Upah Regional):
+>              avg_wage = a0 + a1*avg_cons + a2*rls_kab + a3*infra_kab + a4*umk_riil + e1
+>            - Persamaan 2 (Konsumsi Regional):
+>              avg_cons = b0 + b1*avg_wage + b2*share_formal + b3*rasio_sek + b4*avg_age + e2
+>            
+>            CATATAN DIAGNOSTIK ESTIMASI BERBOBOT:
+>            - Penggunaan [pw = est_populasi] dan vce(robust) memberikan estimasi dan
+>              robust standard error yang mempertimbangkan ukuran populasi tiap daerah.
+>            - Pada postestimation ivregress 2sls berbobot:
+>              * estat endogenous & estat overid memerlukan opsi ", forceweights"
+>              * estat firststage menggunakan opsi ", all" (tanpa forceweights)
+>            ------------------------------------------------------------------------- */
+. 
+.         // A. BASELINE OLS TERTIMBANG (MASIH MENGANDUNG SIMULTANEITY BIAS)
+.         reg avg_wage avg_cons rls_kab infra_kab umk_riil [pw = est_populasi], vce(robust)
+{txt}(sum of wgt is 13,267,425.021734)
+
+Linear regression                               Number of obs     = {res}       100
+                                                {txt}F(4, 95)          =  {res}   793.06
+                                                {txt}Prob > F          = {res}    0.0000
+                                                {txt}R-squared         = {res}    0.9585
+                                                {txt}Root MSE          =    {res} .07607
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}    Robust
+{col 1}    avg_wage{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 4}avg_cons {c |}{col 14}{res}{space 2} .9765666{col 26}{space 2} .0257398{col 37}{space 1}   37.94{col 46}{space 3}0.000{col 54}{space 4} .9254667{col 67}{space 3} 1.027666
+{txt}{space 5}rls_kab {c |}{col 14}{res}{space 2}-.0073803{col 26}{space 2}  .008759{col 37}{space 1}   -0.84{col 46}{space 3}0.402{col 54}{space 4} -.024769{col 67}{space 3} .0100085
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2}-.0017099{col 26}{space 2} .0007885{col 37}{space 1}   -2.17{col 46}{space 3}0.033{col 54}{space 4}-.0032753{col 67}{space 3}-.0001444
+{txt}{space 4}umk_riil {c |}{col 14}{res}{space 2} .0724363{col 26}{space 2} .0245298{col 37}{space 1}    2.95{col 46}{space 3}0.004{col 54}{space 4} .0237386{col 67}{space 3} .1211341
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2}-.2966888{col 26}{space 2} .0964445{col 37}{space 1}   -3.08{col 46}{space 3}0.003{col 54}{space 4}-.4881552{col 67}{space 3}-.1052223
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{res}{txt}
+{com}.         estimates store ols_w_eq1
+{txt}
+{com}.         
+.         reg avg_cons avg_wage share_formal rasio_sek avg_age [pw = est_populasi], vce(robust)
+{txt}(sum of wgt is 13,267,425.021734)
+
+Linear regression                               Number of obs     = {res}       100
+                                                {txt}F(4, 95)          =  {res}   927.47
+                                                {txt}Prob > F          = {res}    0.0000
+                                                {txt}R-squared         = {res}    0.9577
+                                                {txt}Root MSE          =    {res} .07775
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}    Robust
+{col 1}    avg_cons{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 4}avg_wage {c |}{col 14}{res}{space 2} .9485437{col 26}{space 2} .0236945{col 37}{space 1}   40.03{col 46}{space 3}0.000{col 54}{space 4} .9015041{col 67}{space 3} .9955833
+{txt}share_formal {c |}{col 14}{res}{space 2} .0032279{col 26}{space 2} .0015292{col 37}{space 1}    2.11{col 46}{space 3}0.037{col 54}{space 4} .0001921{col 67}{space 3} .0062637
+{txt}{space 3}rasio_sek {c |}{col 14}{res}{space 2} .0002649{col 26}{space 2} .0008565{col 37}{space 1}    0.31{col 46}{space 3}0.758{col 54}{space 4}-.0014354{col 67}{space 3} .0019652
+{txt}{space 5}avg_age {c |}{col 14}{res}{space 2}-.0023041{col 26}{space 2} .0125706{col 37}{space 1}   -0.18{col 46}{space 3}0.855{col 54}{space 4}-.0272598{col 67}{space 3} .0226517
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2} .3320946{col 26}{space 2}  .513325{col 37}{space 1}    0.65{col 46}{space 3}0.519{col 54}{space 4}-.6869843{col 67}{space 3} 1.351174
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{res}{txt}
+{com}.         estimates store ols_w_eq2
+{txt}
+{com}. 
+.         // B. TWO-STAGE LEAST SQUARES (2SLS) TERTIMBANG + UJI DIAGNOSTIK INSTRUMEN
+.         * Persamaan 1: Menginstrumenkan avg_cons dengan variabel ekslusi dari Persamaan 2
+.         ivregress 2sls avg_wage rls_kab infra_kab umk_riil (avg_cons = share_formal rasio_sek avg_age) [pw = est_populasi], vce(robust) first
+{res}{txt}(sum of wgt is   1.3267e+07)
+
+First-stage regressions
+{hline 23}
+{res}
+{txt}{col 57}{lalign 13:Number of obs}{col 70} = {res}{ralign 6:100}
+{txt}{col 57}{lalign 13:F({res:6}, {res:93})}{col 70} = {res}{ralign 6:14.78}
+{txt}{col 57}{lalign 13:Prob > F}{col 70} = {res}{ralign 6:0.0000}
+{txt}{col 57}{lalign 13:R-squared}{col 70} = {res}{ralign 6:0.4295}
+{txt}{col 57}{lalign 13:Adj R-squared}{col 70} = {res}{ralign 6:0.3927}
+{txt}{col 57}{lalign 13:Root MSE}{col 70} = {res}{ralign 6:0.2884}
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}    Robust
+{col 1}    avg_cons{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 5}rls_kab {c |}{col 14}{res}{space 2}-.0299183{col 26}{space 2} .1213602{col 37}{space 1}   -0.25{col 46}{space 3}0.806{col 54}{space 4}-.2709155{col 67}{space 3}  .211079
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2} .0104532{col 26}{space 2}  .005845{col 37}{space 1}    1.79{col 46}{space 3}0.077{col 54}{space 4}-.0011538{col 67}{space 3} .0220602
+{txt}{space 4}umk_riil {c |}{col 14}{res}{space 2} .0942763{col 26}{space 2} .0756198{col 37}{space 1}    1.25{col 46}{space 3}0.216{col 54}{space 4}-.0558895{col 67}{space 3} .2444422
+{txt}share_formal {c |}{col 14}{res}{space 2} .0128101{col 26}{space 2} .0128828{col 37}{space 1}    0.99{col 46}{space 3}0.323{col 54}{space 4}-.0127727{col 67}{space 3} .0383929
+{txt}{space 3}rasio_sek {c |}{col 14}{res}{space 2} .0074675{col 26}{space 2} .0060246{col 37}{space 1}    1.24{col 46}{space 3}0.218{col 54}{space 4}-.0044962{col 67}{space 3} .0194312
+{txt}{space 5}avg_age {c |}{col 14}{res}{space 2}-.0294559{col 26}{space 2}  .058053{col 37}{space 1}   -0.51{col 46}{space 3}0.613{col 54}{space 4}-.1447377{col 67}{space 3} .0858258
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2} 2.681375{col 26}{space 2} 2.632865{col 37}{space 1}    1.02{col 46}{space 3}0.311{col 54}{space 4}-2.546972{col 67}{space 3} 7.909723
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+
+{res}
+{txt}{col 1}Instrumental variables 2SLS regression{col 51}Number of obs{col 67}= {res}       100
+{txt}{col 1}{col 51}Wald chi2({res}4{txt}){col 67}= {res}   1524.52
+{txt}{col 1}{col 51}Prob > chi2{col 67}= {res}    0.0000
+{txt}{col 1}{col 51}R-squared{col 67}= {res}    0.9582
+{txt}{col 51}Root MSE{col 67}=    {res} .07449
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}    Robust
+{col 1}    avg_wage{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      z{col 46}   P>|z|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 4}avg_cons {c |}{col 14}{res}{space 2} .9511798{col 26}{space 2} .1464573{col 37}{space 1}    6.49{col 46}{space 3}0.000{col 54}{space 4} .6641287{col 67}{space 3} 1.238231
+{txt}{space 5}rls_kab {c |}{col 14}{res}{space 2}-.0040142{col 26}{space 2} .0224375{col 37}{space 1}   -0.18{col 46}{space 3}0.858{col 54}{space 4}-.0479908{col 67}{space 3} .0399624
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2}-.0013129{col 26}{space 2} .0024042{col 37}{space 1}   -0.55{col 46}{space 3}0.585{col 54}{space 4}-.0060251{col 67}{space 3} .0033993
+{txt}{space 4}umk_riil {c |}{col 14}{res}{space 2} .0744066{col 26}{space 2} .0264597{col 37}{space 1}    2.81{col 46}{space 3}0.005{col 54}{space 4} .0225465{col 67}{space 3} .1262666
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2}-.2771636{col 26}{space 2} .1316408{col 37}{space 1}   -2.11{col 46}{space 3}0.035{col 54}{space 4} -.535175{col 67}{space 3}-.0191523
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{p 0 14 80}Instrumented: {res:avg_cons}{p_end}
+{p 0 14 80}{space 1}Instruments: {res:rls_kab infra_kab umk_riil share_formal rasio_sek avg_age}{p_end}
+
+{com}.         estimates store tsls_w_eq1
+{txt}
+{com}.         
+.         * Uji Diagnostik Ekonometrika Persamaan 1:
+.         estat endogenous, forceweights
+
+{txt}{col 3}Tests of endogeneity
+{col 3}H0: Variables are exogenous
+
+{col 3}Robust score chi2({res}1{txt}){col 35}={res}{col 37} .030059{txt}  (p = {res}0.8624{txt})
+{col 3}Robust regression F({res}1{txt},{res}94{txt}){col 35}={res}{col 37} .028181{txt}  (p = {res}0.8670{txt})
+
+{com}.         estat firststage, all
+
+{txt}{col 3}First-stage regression summary statistics
+{res}{col 3}{text}{hline 13}{c TT}{hline 12}{hline 12}{hline 12}{hline 12}{hline 12}
+{col 16}{c |}{col 29}Adjusted{col 43}Partial{col 57}Robust
+{col 3}{text}    Variable{col 16}{c |}   R-sq.{col 29}   R-sq.{col 41}    R-sq.{col 53}    F(3,93){col 65}  Prob > F
+{res}{col 3}{text}{hline 13}{c +}{hline 12}{hline 12}{hline 12}{hline 12}{hline 12}
+{col 3}{text}    avg_cons{col 16}{c |}{result}{space 2}0.4295{col 29}{space 2}0.3927{col 41}{space 3}0.0269{col 53}{space 3} .796638{col 65}{space 3}0.4988
+{col 3}{text}{hline 13}{c BT}{hline 12}{hline 12}{hline 12}{hline 12}{hline 12}
+
+
+{col 3}Shea's partial R-squared
+{res}{col 3}{text}{hline 13}{c TT}{hline 18}{hline 18}
+{col 16}{c |}{col 22}Shea's{col 41}Shea's
+{col 3}{text}    Variable{col 16}{c |}  partial R-sq.{col 35}adj. partial R-sq.
+{res}{col 3}{text}{hline 13}{c +}{hline 18}{hline 18}
+{col 3}{text}    avg_cons{col 16}{c |}{result}{space 5}0.0269{col 35}{space 6}-0.0248
+{col 3}{text}{hline 13}{c BT}{hline 18}{hline 18}
+
+{res}{txt}
+{com}.         estat overid, forceweights
+
+{txt}{col 3}Test of overidentifying restrictions:
+
+{col 3}Score chi2({res}2{txt}){col 26}={res}{col 28} .079866{txt}{col 38}(p = {res}0.9609{txt})
+
+{com}.         
+.         * Persamaan 2: Menginstrumenkan avg_wage dengan variabel ekslusi dari Persamaan 1
+.         ivregress 2sls avg_cons share_formal rasio_sek avg_age (avg_wage = rls_kab infra_kab umk_riil) [pw = est_populasi], vce(robust) first
+{res}{txt}(sum of wgt is   1.3267e+07)
+
+First-stage regressions
+{hline 23}
+{res}
+{txt}{col 57}{lalign 13:Number of obs}{col 70} = {res}{ralign 6:100}
+{txt}{col 57}{lalign 13:F({res:6}, {res:93})}{col 70} = {res}{ralign 6:14.79}
+{txt}{col 57}{lalign 13:Prob > F}{col 70} = {res}{ralign 6:0.0000}
+{txt}{col 57}{lalign 13:R-squared}{col 70} = {res}{ralign 6:0.4014}
+{txt}{col 57}{lalign 13:Adj R-squared}{col 70} = {res}{ralign 6:0.3627}
+{txt}{col 57}{lalign 13:Root MSE}{col 70} = {res}{ralign 6:0.2922}
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}    Robust
+{col 1}    avg_wage{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+share_formal {c |}{col 14}{res}{space 2} .0127546{col 26}{space 2} .0129444{col 37}{space 1}    0.99{col 46}{space 3}0.327{col 54}{space 4}-.0129504{col 67}{space 3} .0384596
+{txt}{space 3}rasio_sek {c |}{col 14}{res}{space 2} .0070269{col 26}{space 2} .0057943{col 37}{space 1}    1.21{col 46}{space 3}0.228{col 54}{space 4}-.0044793{col 67}{space 3} .0185331
+{txt}{space 5}avg_age {c |}{col 14}{res}{space 2}-.0251565{col 26}{space 2} .0604473{col 37}{space 1}   -0.42{col 46}{space 3}0.678{col 54}{space 4}-.1451929{col 67}{space 3} .0948799
+{txt}{space 5}rls_kab {c |}{col 14}{res}{space 2}-.0348642{col 26}{space 2} .1189029{col 37}{space 1}   -0.29{col 46}{space 3}0.770{col 54}{space 4}-.2709818{col 67}{space 3} .2012533
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2}  .008367{col 26}{space 2} .0060315{col 37}{space 1}    1.39{col 46}{space 3}0.169{col 54}{space 4}-.0036104{col 67}{space 3} .0203443
+{txt}{space 4}umk_riil {c |}{col 14}{res}{space 2} .1647671{col 26}{space 2} .0838211{col 37}{space 1}    1.97{col 46}{space 3}0.052{col 54}{space 4}-.0016849{col 67}{space 3} .3312191
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2} 2.162343{col 26}{space 2} 2.720535{col 37}{space 1}    0.79{col 46}{space 3}0.429{col 54}{space 4}-3.240099{col 67}{space 3} 7.564786
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+
+{res}
+{txt}{col 1}Instrumental variables 2SLS regression{col 51}Number of obs{col 67}= {res}       100
+{txt}{col 1}{col 51}Wald chi2({res}4{txt}){col 67}= {res}   1372.02
+{txt}{col 1}{col 51}Prob > chi2{col 67}= {res}    0.0000
+{txt}{col 1}{col 51}R-squared{col 67}= {res}    0.9566
+{txt}{col 51}Root MSE{col 67}=    {res} .07676
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}    Robust
+{col 1}    avg_cons{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      z{col 46}   P>|z|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 4}avg_wage {c |}{col 14}{res}{space 2} .9072227{col 26}{space 2} .1004597{col 37}{space 1}    9.03{col 46}{space 3}0.000{col 54}{space 4} .7103254{col 67}{space 3}  1.10412
+{txt}share_formal {c |}{col 14}{res}{space 2} .0045011{col 26}{space 2} .0033044{col 37}{space 1}    1.36{col 46}{space 3}0.173{col 54}{space 4}-.0019755{col 67}{space 3} .0109776
+{txt}{space 3}rasio_sek {c |}{col 14}{res}{space 2} .0001908{col 26}{space 2} .0008455{col 37}{space 1}    0.23{col 46}{space 3}0.821{col 54}{space 4}-.0014664{col 67}{space 3} .0018481
+{txt}{space 5}avg_age {c |}{col 14}{res}{space 2}-.0033367{col 26}{space 2} .0125177{col 37}{space 1}   -0.27{col 46}{space 3}0.790{col 54}{space 4}-.0278709{col 67}{space 3} .0211976
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2} .4206224{col 26}{space 2} .5395162{col 37}{space 1}    0.78{col 46}{space 3}0.436{col 54}{space 4}-.6368099{col 67}{space 3} 1.478055
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{p 0 14 80}Instrumented: {res:avg_wage}{p_end}
+{p 0 14 80}{space 1}Instruments: {res:share_formal rasio_sek avg_age rls_kab infra_kab umk_riil}{p_end}
+
+{com}.         estimates store tsls_w_eq2
+{txt}
+{com}.         
+.         * Uji Diagnostik Ekonometrika Persamaan 2:
+.         estat endogenous, forceweights
+
+{txt}{col 3}Tests of endogeneity
+{col 3}H0: Variables are exogenous
+
+{col 3}Robust score chi2({res}1{txt}){col 35}={res}{col 37} .177751{txt}  (p = {res}0.6733{txt})
+{col 3}Robust regression F({res}1{txt},{res}94{txt}){col 35}={res}{col 37}  .17007{txt}  (p = {res}0.6810{txt})
+
+{com}.         estat firststage, all
+
+{txt}{col 3}First-stage regression summary statistics
+{res}{col 3}{text}{hline 13}{c TT}{hline 12}{hline 12}{hline 12}{hline 12}{hline 12}
+{col 16}{c |}{col 29}Adjusted{col 43}Partial{col 57}Robust
+{col 3}{text}    Variable{col 16}{c |}   R-sq.{col 29}   R-sq.{col 41}    R-sq.{col 53}    F(3,93){col 65}  Prob > F
+{res}{col 3}{text}{hline 13}{c +}{hline 12}{hline 12}{hline 12}{hline 12}{hline 12}
+{col 3}{text}    avg_wage{col 16}{c |}{result}{space 2}0.4014{col 29}{space 2}0.3627{col 41}{space 3}0.0869{col 53}{space 3} 3.19459{col 65}{space 3}0.0271
+{col 3}{text}{hline 13}{c BT}{hline 12}{hline 12}{hline 12}{hline 12}{hline 12}
+
+
+{col 3}Shea's partial R-squared
+{res}{col 3}{text}{hline 13}{c TT}{hline 18}{hline 18}
+{col 16}{c |}{col 22}Shea's{col 41}Shea's
+{col 3}{text}    Variable{col 16}{c |}  partial R-sq.{col 35}adj. partial R-sq.
+{res}{col 3}{text}{hline 13}{c +}{hline 18}{hline 18}
+{col 3}{text}    avg_wage{col 16}{c |}{result}{space 5}0.0869{col 35}{space 6}0.0383
+{col 3}{text}{hline 13}{c BT}{hline 18}{hline 18}
+
+{res}{txt}
+{com}.         estat overid, forceweights
+
+{txt}{col 3}Test of overidentifying restrictions:
+
+{col 3}Score chi2({res}2{txt}){col 26}={res}{col 28}  8.8715{txt}{col 38}(p = {res}0.0118{txt})
+
+{com}. 
+.         // C. THREE-STAGE LEAST SQUARES (3SLS) TERTIMBANG (FULL INFORMATION SYSTEM)
+.         * Mengestimasi kedua persamaan secara serentak dan memperhitungkan korelasi
+.         * antar-residual (Cov(e1, e2) != 0) dengan bobot populasi [aw = est_populasi]
+.         reg3 (eq_wage: avg_wage avg_cons rls_kab infra_kab umk_riil) (eq_cons: avg_cons avg_wage share_formal rasio_sek avg_age) [aw = est_populasi], endog(avg_wage avg_cons) exog(rls_kab infra_kab umk_riil share_formal rasio_sek avg_age) 3sls
+{res}
+{txt}Three-stage least-squares regression
+{hline 78}
+Equation             Obs   Params         RMSE  "R-squared"      chi2   P>chi2
+{hline 78}
+{res}eq_wage              100        4     .0766678      0.9557     973.18   0.0000
+eq_cons              100        4     .0758573      0.9576     981.84   0.0000
+{txt}{hline 78}
+
+{res}{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |} Coefficient{col 26}  Std. err.{col 38}      z{col 46}   P>|z|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{res}eq_wage      {txt}{c |}
+{space 4}avg_cons {c |}{col 14}{res}{space 2} .9358308{col 26}{space 2} .1032789{col 37}{space 1}    9.06{col 46}{space 3}0.000{col 54}{space 4} .7334078{col 67}{space 3} 1.138254
+{txt}{space 5}rls_kab {c |}{col 14}{res}{space 2}-.0065233{col 26}{space 2} .0137787{col 37}{space 1}   -0.47{col 46}{space 3}0.636{col 54}{space 4}-.0335291{col 67}{space 3} .0204826
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2} .0002084{col 26}{space 2}  .001705{col 37}{space 1}    0.12{col 46}{space 3}0.903{col 54}{space 4}-.0031334{col 67}{space 3} .0035501
+{txt}{space 4}umk_riil {c |}{col 14}{res}{space 2} .0257908{col 26}{space 2}  .018201{col 37}{space 1}    1.42{col 46}{space 3}0.156{col 54}{space 4}-.0098825{col 67}{space 3} .0614642
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2}-.1199574{col 26}{space 2}  .154148{col 37}{space 1}   -0.78{col 46}{space 3}0.436{col 54}{space 4}-.4220819{col 67}{space 3} .1821671
+{txt}{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{res}eq_cons      {txt}{c |}
+{space 4}avg_wage {c |}{col 14}{res}{space 2}  .952789{col 26}{space 2} .0692644{col 37}{space 1}   13.76{col 46}{space 3}0.000{col 54}{space 4} .8170333{col 67}{space 3} 1.088545
+{txt}share_formal {c |}{col 14}{res}{space 2} .0026807{col 26}{space 2} .0020304{col 37}{space 1}    1.32{col 46}{space 3}0.187{col 54}{space 4}-.0012988{col 67}{space 3} .0066601
+{txt}{space 3}rasio_sek {c |}{col 14}{res}{space 2} .0005625{col 26}{space 2} .0007029{col 37}{space 1}    0.80{col 46}{space 3}0.424{col 54}{space 4}-.0008152{col 67}{space 3} .0019402
+{txt}{space 5}avg_age {c |}{col 14}{res}{space 2}-.0024616{col 26}{space 2}  .007839{col 37}{space 1}   -0.31{col 46}{space 3}0.754{col 54}{space 4}-.0178258{col 67}{space 3} .0129027
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2}  .342189{col 26}{space 2} .3437452{col 37}{space 1}    1.00{col 46}{space 3}0.320{col 54}{space 4}-.3315391{col 67}{space 3} 1.015917
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+Endogenous variables: {res}avg_wage {res}avg_cons 
+{txt} Exogenous variables: {res}rls_kab {res}infra_kab {res}umk_riil {res}share_formal {res}rasio_sek 
+                      {res}avg_age 
+{txt}
+{com}.         estimates store threesls_w_sys
+{txt}
+{com}. 
+.         // D. GENERALIZED METHOD OF MOMENTS (IV-GMM) TERTIMBANG
+.         * Lebih efisien daripada 2SLS ketika terdapat heteroskedastisitas pada persamaan
+.         * yang overidentified dengan matriks pembobot optimal wmatrix(robust)
+.         ivregress gmm avg_wage rls_kab infra_kab umk_riil (avg_cons = share_formal rasio_sek avg_age) [pw = est_populasi], wmatrix(robust)
+{res}{txt}(sum of wgt is   1.3267e+07)
+{res}
+{txt}{col 1}Instrumental variables GMM regression{col 51}Number of obs{col 67}= {res}       100
+{txt}{col 1}{col 51}Wald chi2({res}4{txt}){col 67}= {res}   1525.45
+{txt}{col 1}{col 51}Prob > chi2{col 67}= {res}    0.0000
+{txt}{col 1}{col 51}R-squared{col 67}= {res}    0.9584
+{txt}{col 1}GMM weight matrix: Robust{col 51}Root MSE{col 67}=    {res} .07425
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}    Robust
+{col 1}    avg_wage{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      z{col 46}   P>|z|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 4}avg_cons {c |}{col 14}{res}{space 2}  .962232{col 26}{space 2} .1408399{col 37}{space 1}    6.83{col 46}{space 3}0.000{col 54}{space 4} .6861909{col 67}{space 3} 1.238273
+{txt}{space 5}rls_kab {c |}{col 14}{res}{space 2} -.005572{col 26}{space 2}  .021633{col 37}{space 1}   -0.26{col 46}{space 3}0.797{col 54}{space 4} -.047972{col 67}{space 3} .0368279
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2}-.0014816{col 26}{space 2} .0023236{col 37}{space 1}   -0.64{col 46}{space 3}0.524{col 54}{space 4}-.0060359{col 67}{space 3} .0030726
+{txt}{space 4}umk_riil {c |}{col 14}{res}{space 2} .0738332{col 26}{space 2}  .026236{col 37}{space 1}    2.81{col 46}{space 3}0.005{col 54}{space 4} .0224115{col 67}{space 3} .1252549
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2}-.2857501{col 26}{space 2}  .127941{col 37}{space 1}   -2.23{col 46}{space 3}0.026{col 54}{space 4}-.5365098{col 67}{space 3}-.0349903
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{p 0 14 80}Instrumented: {res:avg_cons}{p_end}
+{p 0 14 80}{space 1}Instruments: {res:rls_kab infra_kab umk_riil share_formal rasio_sek avg_age}{p_end}
+
+{com}.         estimates store gmm_w_eq1
+{txt}
+{com}. 
+.         // E. TABEL PERBANDINGAN INFERENSI TERTIMBANG: OLS VS 2SLS VS 3SLS VS IV-GMM
+.         estimates table ols_w_eq1 tsls_w_eq1 threesls_w_sys gmm_w_eq1, b(%9.4f) se(%9.4f) stats(N r2) title("Simulasi Sistem Persamaan Simultan Tertimbang (Weighted Inference)")
+{res}
+{txt}{p}Simulasi Sistem Persamaan Simultan Tertimbang (Weighted Inference)
+
+{hline 12}{c -}{c TT}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{ralign 12:Variable} {c |} {center 9:ols_w_eq1} {space 1} {center 9:tsls_w_~1} {space 1} {center 9:threesl~s} {space 1} {center 9:gmm_w_eq1} {space 1}
+{hline 12}{c -}{c +}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{res}{txt}{res}_            {txt}{c |}{res}
+{txt}{space 4}avg_cons {c |}{res} {ralign 9:0.9766}{txt} {space 1}{res} {ralign 9:0.9512}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.9622}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.0257}{txt} {space 1}{res} {ralign 9:0.1465}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.1408}{txt} {space 1}
+{res}{txt}{space 5}rls_kab {c |}{res} {ralign 9:-0.0074}{txt} {space 1}{res} {ralign 9:-0.0040}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:-0.0056}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.0088}{txt} {space 1}{res} {ralign 9:0.0224}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0216}{txt} {space 1}
+{res}{txt}{space 3}infra_kab {c |}{res} {ralign 9:-0.0017}{txt} {space 1}{res} {ralign 9:-0.0013}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:-0.0015}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.0008}{txt} {space 1}{res} {ralign 9:0.0024}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0023}{txt} {space 1}
+{res}{txt}{space 4}umk_riil {c |}{res} {ralign 9:0.0724}{txt} {space 1}{res} {ralign 9:0.0744}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0738}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.0245}{txt} {space 1}{res} {ralign 9:0.0265}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0262}{txt} {space 1}
+{res}{txt}{space 7}_cons {c |}{res} {ralign 9:-0.2967}{txt} {space 1}{res} {ralign 9:-0.2772}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:-0.2858}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.0964}{txt} {space 1}{res} {ralign 9:0.1316}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.1279}{txt} {space 1}
+{res}{txt}{hline 12}{c -}{c +}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{res}{txt}{res}eq_wage      {txt}{c |}{res}
+{txt}{space 4}avg_cons {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.9358}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.1033}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 5}rls_kab {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:-0.0065}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0138}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 3}infra_kab {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0002}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0017}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 4}umk_riil {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0258}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0182}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 7}_cons {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:-0.1200}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.1541}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{hline 12}{c -}{c +}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{res}{txt}{res}eq_cons      {txt}{c |}{res}
+{txt}{space 4}avg_wage {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.9528}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0693}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}share_formal {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0027}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0020}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 3}rasio_sek {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0006}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0007}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 5}avg_age {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:-0.0025}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.0078}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 7}_cons {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.3422}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.3437}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{hline 12}{c -}{c +}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{res}{lalign 12:Statistics}{txt} {c |} {center 9:} {space 1} {center 9:} {space 1} {center 9:} {space 1} {center 9:} {space 1}
+{res}{txt}{ralign 12:N} {c |}{res} {ralign 9:100}{txt} {space 1}{res} {ralign 9:100}{txt} {space 1}{res} {ralign 9:100}{txt} {space 1}{res} {ralign 9:100}{txt} {space 1}
+{res}{txt}{ralign 12:r2} {c |}{res} {ralign 9:0.9585}{txt} {space 1}{res} {ralign 9:0.9582}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:0.9584}{txt} {space 1}
+{res}{txt}{hline 12}{c -}{c BT}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{ralign 62:Legend: b/se}
+{res}{txt}
+{com}. 
+. 
+. ** =============================================================================
+. ** TAHAP 4: ANALISIS EKONOMETRIKA LANJUTAN (MAKRO & DESAIN SURVEI KOMPLEKS MIKRO)
+. ** =============================================================================
+.         // 1. SEEMINGLY UNRELATED REGRESSION (SUR) TERTIMBANG PADA REDUCED-FORM
+.         * Menguji korelasi galat antar-persamaan bentuk tereduksi (Breusch-Pagan test)
+.         sureg (rf_wage: avg_wage rls_kab infra_kab umk_riil share_formal rasio_sek avg_age) (rf_cons: avg_cons rls_kab infra_kab umk_riil share_formal rasio_sek avg_age) [aw = est_populasi], corr
+{res}
+{txt}Seemingly unrelated regression
+{hline 78}
+Equation             Obs   Params         RMSE  "R-squared"      chi2   P>chi2
+{hline 78}
+{res}rf_wage              100        6     .2817619      0.4014      67.05   0.0000
+rf_cons              100        6     .2781649      0.4295      75.28   0.0000
+{txt}{hline 78}
+
+{res}{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |} Coefficient{col 26}  Std. err.{col 38}      z{col 46}   P>|z|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{res}rf_wage      {txt}{c |}
+{space 5}rls_kab {c |}{col 14}{res}{space 2}-.0348642{col 26}{space 2} .1112786{col 37}{space 1}   -0.31{col 46}{space 3}0.754{col 54}{space 4}-.2529664{col 67}{space 3} .1832379
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2}  .008367{col 26}{space 2} .0066776{col 37}{space 1}    1.25{col 46}{space 3}0.210{col 54}{space 4}-.0047208{col 67}{space 3} .0214547
+{txt}{space 4}umk_riil {c |}{col 14}{res}{space 2} .1647671{col 26}{space 2} .0963226{col 37}{space 1}    1.71{col 46}{space 3}0.087{col 54}{space 4}-.0240216{col 67}{space 3} .3535559
+{txt}share_formal {c |}{col 14}{res}{space 2} .0127546{col 26}{space 2} .0139814{col 37}{space 1}    0.91{col 46}{space 3}0.362{col 54}{space 4}-.0146485{col 67}{space 3} .0401576
+{txt}{space 3}rasio_sek {c |}{col 14}{res}{space 2} .0070269{col 26}{space 2} .0053625{col 37}{space 1}    1.31{col 46}{space 3}0.190{col 54}{space 4}-.0034834{col 67}{space 3} .0175372
+{txt}{space 5}avg_age {c |}{col 14}{res}{space 2}-.0251565{col 26}{space 2} .0503251{col 37}{space 1}   -0.50{col 46}{space 3}0.617{col 54}{space 4}-.1237919{col 67}{space 3}  .073479
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2} 2.162343{col 26}{space 2} 2.237362{col 37}{space 1}    0.97{col 46}{space 3}0.334{col 54}{space 4}-2.222806{col 67}{space 3} 6.547492
+{txt}{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{res}rf_cons      {txt}{c |}
+{space 5}rls_kab {c |}{col 14}{res}{space 2}-.0299183{col 26}{space 2}  .109858{col 37}{space 1}   -0.27{col 46}{space 3}0.785{col 54}{space 4}-.2452361{col 67}{space 3} .1853995
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2} .0104532{col 26}{space 2} .0065923{col 37}{space 1}    1.59{col 46}{space 3}0.113{col 54}{space 4}-.0024675{col 67}{space 3} .0233738
+{txt}{space 4}umk_riil {c |}{col 14}{res}{space 2} .0942763{col 26}{space 2} .0950929{col 37}{space 1}    0.99{col 46}{space 3}0.321{col 54}{space 4}-.0921023{col 67}{space 3} .2806549
+{txt}share_formal {c |}{col 14}{res}{space 2} .0128101{col 26}{space 2} .0138029{col 37}{space 1}    0.93{col 46}{space 3}0.353{col 54}{space 4}-.0142431{col 67}{space 3} .0398633
+{txt}{space 3}rasio_sek {c |}{col 14}{res}{space 2} .0074675{col 26}{space 2}  .005294{col 37}{space 1}    1.41{col 46}{space 3}0.158{col 54}{space 4}-.0029086{col 67}{space 3} .0178436
+{txt}{space 5}avg_age {c |}{col 14}{res}{space 2}-.0294559{col 26}{space 2} .0496827{col 37}{space 1}   -0.59{col 46}{space 3}0.553{col 54}{space 4}-.1268322{col 67}{space 3} .0679203
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2} 2.681375{col 26}{space 2} 2.208799{col 37}{space 1}    1.21{col 46}{space 3}0.225{col 54}{space 4}-1.647792{col 67}{space 3} 7.010543
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{res}
+{txt}Correlation matrix of residuals:
+
+         rf_wage  rf_cons
+rf_wage  {res} 1.0000
+{txt}rf_cons  {res} 0.9648   1.0000
+
+{txt}Breusch–Pagan test of independence: chi2(1) = {res}   93.083{txt}, Pr = {res}0.0000
+{txt}
+{com}. 
+.         // 2. QUANTILE REGRESSION TERTIMBANG (Q25, Q50, Q75)
+.         * Melihat perbedaan dampak variabel penjelas pada kabupaten/kota berupah rendah (Q25),
+.         * menengah (Q50/median), dan tinggi (Q75) dengan bobot populasi [pw = est_populasi]
+.         qreg avg_wage rls_kab infra_kab umk_riil share_formal [pw = est_populasi], quantile(0.25) vce(robust)
+{txt}Iteration  1:  WLS sum of weighted deviations = {res} 1355155.5
+
+{txt}Iteration  1: sum of abs. weighted deviations = {res} 1449297.5
+{txt}Iteration  2: sum of abs. weighted deviations = {res} 1274943.9
+{txt}Iteration  3: sum of abs. weighted deviations = {res} 1220259.8
+{txt}Iteration  4: sum of abs. weighted deviations = {res} 1210733.2
+{txt}Iteration  5: sum of abs. weighted deviations = {res} 1205506.1
+{txt}Iteration  6: sum of abs. weighted deviations = {res} 1194461.6
+{txt}Iteration  7: sum of abs. weighted deviations = {res} 1194159.4
+
+{txt}.25 Quantile regression{col 53}Number of obs = {res}       100
+{txt}  Raw sum of deviations{res}  1407638{txt} (about {res}2.7671846{txt})
+  Min sum of deviations{res}  1194159{col 53}{txt}Pseudo R2     = {res}    0.1517
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}    Robust
+{col 1}    avg_wage{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 5}rls_kab {c |}{col 14}{res}{space 2}  .087539{col 26}{space 2}  .107053{col 37}{space 1}    0.82{col 46}{space 3}0.416{col 54}{space 4}-.1249881{col 67}{space 3} .3000662
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2} .0042869{col 26}{space 2} .0089714{col 37}{space 1}    0.48{col 46}{space 3}0.634{col 54}{space 4}-.0135236{col 67}{space 3} .0220973
+{txt}{space 4}umk_riil {c |}{col 14}{res}{space 2} .2771424{col 26}{space 2} .1156147{col 37}{space 1}    2.40{col 46}{space 3}0.018{col 54}{space 4} .0476183{col 67}{space 3} .5066665
+{txt}share_formal {c |}{col 14}{res}{space 2} .0088763{col 26}{space 2} .0181032{col 37}{space 1}    0.49{col 46}{space 3}0.625{col 54}{space 4}-.0270632{col 67}{space 3} .0448157
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2} .1554132{col 26}{space 2} .6726337{col 37}{space 1}    0.23{col 46}{space 3}0.818{col 54}{space 4}-1.179934{col 67}{space 3}  1.49076
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+
+{com}.         estimates store q25_w
+{txt}
+{com}.         qreg avg_wage rls_kab infra_kab umk_riil share_formal [pw = est_populasi], quantile(0.50) vce(robust)
+{txt}Iteration  1:  WLS sum of weighted deviations = {res} 1531432.7
+
+{txt}Iteration  1: sum of abs. weighted deviations = {res} 1569925.6
+{txt}Iteration  2: sum of abs. weighted deviations = {res} 1529349.5
+{txt}Iteration  3: sum of abs. weighted deviations = {res} 1528542.7
+{txt}Iteration  4: sum of abs. weighted deviations = {res}   1527643
+{txt}Iteration  5: sum of abs. weighted deviations = {res} 1527041.7
+{txt}Iteration  6: sum of abs. weighted deviations = {res} 1525814.3
+{txt}Iteration  7: sum of abs. weighted deviations = {res} 1525812.9
+
+{txt}Median regression{col 53}Number of obs = {res}       100
+{txt}  Raw sum of deviations{res}  1837673{txt} (about {res}2.9684634{txt})
+  Min sum of deviations{res}  1525813{col 53}{txt}Pseudo R2     = {res}    0.1697
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}    Robust
+{col 1}    avg_wage{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 5}rls_kab {c |}{col 14}{res}{space 2} .1040503{col 26}{space 2} .1119323{col 37}{space 1}    0.93{col 46}{space 3}0.355{col 54}{space 4}-.1181634{col 67}{space 3} .3262641
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2}  .011503{col 26}{space 2} .0078527{col 37}{space 1}    1.46{col 46}{space 3}0.146{col 54}{space 4}-.0040866{col 67}{space 3} .0270926
+{txt}{space 4}umk_riil {c |}{col 14}{res}{space 2} .1206294{col 26}{space 2} .1047859{col 37}{space 1}    1.15{col 46}{space 3}0.253{col 54}{space 4}-.0873969{col 67}{space 3} .3286558
+{txt}share_formal {c |}{col 14}{res}{space 2}   .00051{col 26}{space 2} .0171253{col 37}{space 1}    0.03{col 46}{space 3}0.976{col 54}{space 4}-.0334881{col 67}{space 3} .0345081
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2} .8241184{col 26}{space 2} .7044047{col 37}{space 1}    1.17{col 46}{space 3}0.245{col 54}{space 4}-.5743017{col 67}{space 3} 2.222538
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+
+{com}.         estimates store q50_w
+{txt}
+{com}.         qreg avg_wage rls_kab infra_kab umk_riil share_formal [pw = est_populasi], quantile(0.75) vce(robust)
+{txt}Iteration  1:  WLS sum of weighted deviations = {res}   1327467
+
+{txt}Iteration  1: sum of abs. weighted deviations = {res} 1333454.1
+{txt}Iteration  2: sum of abs. weighted deviations = {res}   1327189
+{txt}Iteration  3: sum of abs. weighted deviations = {res} 1255518.1
+{txt}Iteration  4: sum of abs. weighted deviations = {res} 1218429.1
+{txt}Iteration  5: sum of abs. weighted deviations = {res} 1167892.5
+{txt}Iteration  6: sum of abs. weighted deviations = {res} 1164287.3
+{txt}Iteration  7: sum of abs. weighted deviations = {res} 1163831.2
+{txt}Iteration  8: sum of abs. weighted deviations = {res}   1162525
+{txt}Iteration  9: sum of abs. weighted deviations = {res} 1162176.3
+{txt}Iteration 10: sum of abs. weighted deviations = {res} 1162064.3
+
+{txt}.75 Quantile regression{col 53}Number of obs = {res}       100
+{txt}  Raw sum of deviations{res}  1621451{txt} (about {res}3.14276{txt})
+  Min sum of deviations{res}  1162064{col 53}{txt}Pseudo R2     = {res}    0.2833
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}    Robust
+{col 1}    avg_wage{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 5}rls_kab {c |}{col 14}{res}{space 2} -.044326{col 26}{space 2} .1064709{col 37}{space 1}   -0.42{col 46}{space 3}0.678{col 54}{space 4}-.2556975{col 67}{space 3} .1670455
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2} .0052939{col 26}{space 2} .0077881{col 37}{space 1}    0.68{col 46}{space 3}0.498{col 54}{space 4}-.0101674{col 67}{space 3} .0207552
+{txt}{space 4}umk_riil {c |}{col 14}{res}{space 2} .0845398{col 26}{space 2} .1270526{col 37}{space 1}    0.67{col 46}{space 3}0.507{col 54}{space 4}-.1676914{col 67}{space 3}  .336771
+{txt}share_formal {c |}{col 14}{res}{space 2} .0288644{col 26}{space 2} .0174209{col 37}{space 1}    1.66{col 46}{space 3}0.101{col 54}{space 4}-.0057205{col 67}{space 3} .0634494
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2} 1.288934{col 26}{space 2} .6386318{col 37}{space 1}    2.02{col 46}{space 3}0.046{col 54}{space 4} .0210896{col 67}{space 3} 2.556778
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+
+{com}.         estimates store q75_w
+{txt}
+{com}.         
+.         estimates table q25_w q50_w q75_w, b(%9.4f) se(%9.4f) title("Quantile Regression Tertimbang Populasi (Q25 vs Q50 vs Q75)")
+{res}
+{txt}{p}Quantile Regression Tertimbang Populasi (Q25 vs Q50 vs Q75)
+
+{hline 12}{c -}{c TT}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{ralign 12:Variable} {c |} {center 9:q25_w} {space 1} {center 9:q50_w} {space 1} {center 9:q75_w} {space 1}
+{hline 12}{c -}{c +}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{res}{txt}{space 5}rls_kab {c |}{res} {ralign 9:0.0875}{txt} {space 1}{res} {ralign 9:0.1041}{txt} {space 1}{res} {ralign 9:-0.0443}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.1071}{txt} {space 1}{res} {ralign 9:0.1119}{txt} {space 1}{res} {ralign 9:0.1065}{txt} {space 1}
+{res}{txt}{space 3}infra_kab {c |}{res} {ralign 9:0.0043}{txt} {space 1}{res} {ralign 9:0.0115}{txt} {space 1}{res} {ralign 9:0.0053}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.0090}{txt} {space 1}{res} {ralign 9:0.0079}{txt} {space 1}{res} {ralign 9:0.0078}{txt} {space 1}
+{res}{txt}{space 4}umk_riil {c |}{res} {ralign 9:0.2771}{txt} {space 1}{res} {ralign 9:0.1206}{txt} {space 1}{res} {ralign 9:0.0845}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.1156}{txt} {space 1}{res} {ralign 9:0.1048}{txt} {space 1}{res} {ralign 9:0.1271}{txt} {space 1}
+{res}{txt}share_formal {c |}{res} {ralign 9:0.0089}{txt} {space 1}{res} {ralign 9:0.0005}{txt} {space 1}{res} {ralign 9:0.0289}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.0181}{txt} {space 1}{res} {ralign 9:0.0171}{txt} {space 1}{res} {ralign 9:0.0174}{txt} {space 1}
+{res}{txt}{space 7}_cons {c |}{res} {ralign 9:0.1554}{txt} {space 1}{res} {ralign 9:0.8241}{txt} {space 1}{res} {ralign 9:1.2889}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.6726}{txt} {space 1}{res} {ralign 9:0.7044}{txt} {space 1}{res} {ralign 9:0.6386}{txt} {space 1}
+{res}{txt}{hline 12}{c -}{c BT}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{ralign 50:Legend: b/se}
+{res}{txt}
+{com}. 
+.         // 3. INFERENSI SURVEI KOMPLEKS LANGSUNG DI LEVEL MIKRO (N = 50.000 INDIVIDU)
+.         use "data_mikro_simulasi_50k.dta", clear
+{txt}
+{com}.         
+.         * CATATAN DESAIN SURVEI KOMPLEKS (SVYSET):
+.         * Mendeklarasikan Primary Sampling Unit (PSU) pada level kabupaten/kota (id_kab)
+.         * dan probability weight pada final_weight. Seluruh estimasi svy: otomatis
+.         * menghitung standard error yang kebal terhadap klaster wilayah & bobot survei.
+.         svyset id_kab [pweight = final_weight]
+
+{txt}Sampling weights:{col 19}{res}final_weight
+             {txt}VCE:{col 19}{res}linearized
+     {txt}Single unit:{col 19}{res}missing
+        {txt}Strata 1:{col 19}<one>
+ Sampling unit 1:{col 19}{res}id_kab
+           {txt}FPC 1:{col 19}<zero>
+{p2colreset}{...}
+
+{com}.         
+.         * A. Survey-Weighted 2SLS pada Data Mikro:
+.         * Mengatasi endogenitas pendidikan (educ_yr) akibat unobserved ability menggunakan
+.         * instrumen ketersediaan sekolah daerah (rasio_sek) dengan inferensi survei penuh
+.         svy: ivregress 2sls ln_wage age exp exp_sq female infra_kab (educ_yr = rasio_sek)
+{res}{txt}(running {bf:ivregress} on estimation sample)
+{res}
+{txt}Survey: Instrumental variables 2SLS regression
+
+{col 1}{lalign 16:Number of strata}{col 17} = {res}{ralign 3:1}{txt}{col 51}{lalign 15:Number of obs}{col 66} = {res}{ralign 10:50,000}
+{txt}{col 1}{lalign 16:Number of PSUs}{col 17} = {res}{ralign 3:100}{txt}{col 51}{lalign 15:Population size}{col 66} = {res}{ralign 10:13,267,425}
+{txt}{col 51}{lalign 15:Design df}{col 66} = {res}{ralign 10:99}
+{txt}{col 51}{lalign 15:F({res:5}, {res:95})}{col 66} = {res}{ralign 10:744.67}
+{txt}{col 51}{lalign 15:Prob > F}{col 66} = {res}{ralign 10:0.0000}
+{txt}{col 51}{lalign 15:R-squared}{col 66} = {res}{ralign 10:0.3998}
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}  Linearized
+{col 1}     ln_wage{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 5}educ_yr {c |}{col 14}{res}{space 2} .1075959{col 26}{space 2} .0293395{col 37}{space 1}    3.67{col 46}{space 3}0.000{col 54}{space 4}   .04938{col 67}{space 3} .1658118
+{txt}{space 9}age {c |}{col 14}{res}{space 2} .0320535{col 26}{space 2}  .001231{col 37}{space 1}   26.04{col 46}{space 3}0.000{col 54}{space 4}  .029611{col 67}{space 3}  .034496
+{txt}{space 9}exp {c |}{col 14}{res}{space 2}        0{col 26}{txt}  (omitted)
+{space 6}exp_sq {c |}{col 14}{res}{space 2}-.0004916{col 26}{space 2} .0000166{col 37}{space 1}  -29.70{col 46}{space 3}0.000{col 54}{space 4}-.0005245{col 67}{space 3}-.0004588
+{txt}{space 6}female {c |}{col 14}{res}{space 2}-.1720062{col 26}{space 2} .0106268{col 37}{space 1}  -16.19{col 46}{space 3}0.000{col 54}{space 4}-.1930921{col 67}{space 3}-.1509203
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2} .0132949{col 26}{space 2} .0018978{col 37}{space 1}    7.01{col 46}{space 3}0.000{col 54}{space 4} .0095292{col 67}{space 3} .0170606
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2}-.3883512{col 26}{space 2} .3472134{col 37}{space 1}   -1.12{col 46}{space 3}0.266{col 54}{space 4}-1.077298{col 67}{space 3} .3005956
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{p 0 14 80}Instrumented: {res:educ_yr}{p_end}
+{p 0 14 80}{space 1}Instruments: {res:age exp_sq female infra_kab rasio_sek}{p_end}
+
+{com}.         estimates store svy_iv_mikro
+{txt}
+{com}.         
+.         * B. Survey-Weighted Probit & Logit + Average Marginal Effects (AME):
+.         * Memodelkan probabilitas individu bekerja di sektor formal (formal = 1)
+.         svy: probit formal educ_yr age exp female infra_kab
+{res}{txt}(running {bf:probit} on estimation sample)
+{res}
+{txt}note: {bf:exp} omitted because of collinearity.
+
+Survey: Probit regression
+
+{col 1}{lalign 16:Number of strata}{col 17} = {res}{ralign 3:1}{txt}{col 51}{lalign 15:Number of obs}{col 66} = {res}{ralign 10:50,000}
+{txt}{col 1}{lalign 16:Number of PSUs}{col 17} = {res}{ralign 3:100}{txt}{col 51}{lalign 15:Population size}{col 66} = {res}{ralign 10:13,267,425}
+{txt}{col 51}{lalign 15:Design df}{col 66} = {res}{ralign 10:99}
+{txt}{col 51}{lalign 15:F({res:4}, {res:96})}{col 66} = {res}{ralign 10:1292.87}
+{txt}{col 51}{lalign 15:Prob > F}{col 66} = {res}{ralign 10:0.0000}
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}  Linearized
+{col 1}      formal{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 5}educ_yr {c |}{col 14}{res}{space 2} .2449474{col 26}{space 2}  .003617{col 37}{space 1}   67.72{col 46}{space 3}0.000{col 54}{space 4} .2377705{col 67}{space 3} .2521244
+{txt}{space 9}age {c |}{col 14}{res}{space 2} .0012894{col 26}{space 2}  .000493{col 37}{space 1}    2.62{col 46}{space 3}0.010{col 54}{space 4} .0003112{col 67}{space 3} .0022675
+{txt}{space 9}exp {c |}{col 14}{res}{space 2}        0{col 26}{txt}  (omitted)
+{space 6}female {c |}{col 14}{res}{space 2}-.2150175{col 26}{space 2} .0122414{col 37}{space 1}  -17.56{col 46}{space 3}0.000{col 54}{space 4}-.2393072{col 67}{space 3}-.1907279
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2} .0133652{col 26}{space 2}  .000814{col 37}{space 1}   16.42{col 46}{space 3}0.000{col 54}{space 4} .0117501{col 67}{space 3} .0149802
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2}-2.912314{col 26}{space 2} .0683765{col 37}{space 1}  -42.59{col 46}{space 3}0.000{col 54}{space 4}-3.047988{col 67}{space 3}-2.776641
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+
+{com}.         margins, dydx(*) post
+{res}
+{txt}Average marginal effects
+
+{col 1}{lalign 16:Number of strata}{col 9} = {res}{ralign 3:1}{txt}{col 51}{lalign 15:Number of obs}{col 66} = {res}{ralign 10:50,000}
+{txt}{col 1}{lalign 16:Number of PSUs}{col 9} = {res}{ralign 3:100}{txt}{col 51}{lalign 15:Population size}{col 66} = {res}{ralign 10:13,267,425}
+{txt}{col 1}Model VCE: {res:Linearized}{col 51}{lalign 15:Design df}{col 66} = {res}{ralign 10:99}
+
+{txt}{p2colset 1 13 13 2}{...}
+{p2col:Expression:}{res:Pr(formal), predict()}{p_end}
+{p2col:dy/dx wrt:}{res:educ_yr age exp female infra_kab}{p_end}
+{p2colreset}{...}
+
+{res}{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26} Delta-method
+{col 14}{c |}      dy/dx{col 26}   std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 5}educ_yr {c |}{col 14}{res}{space 2} .0778066{col 26}{space 2} .0009089{col 37}{space 1}   85.61{col 46}{space 3}0.000{col 54}{space 4} .0760032{col 67}{space 3}   .07961
+{txt}{space 9}age {c |}{col 14}{res}{space 2} .0004096{col 26}{space 2} .0001569{col 37}{space 1}    2.61{col 46}{space 3}0.010{col 54}{space 4} .0000982{col 67}{space 3} .0007209
+{txt}{space 9}exp {c |}{col 14}{res}{space 2}        0{col 26}{txt}  (omitted)
+{space 6}female {c |}{col 14}{res}{space 2}-.0682995{col 26}{space 2} .0038829{col 37}{space 1}  -17.59{col 46}{space 3}0.000{col 54}{space 4} -.076004{col 67}{space 3} -.060595
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2} .0042454{col 26}{space 2} .0002484{col 37}{space 1}   17.09{col 46}{space 3}0.000{col 54}{space 4} .0037525{col 67}{space 3} .0047383
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{res}{txt}
+{com}.         estimates store svy_probit_ame
+{txt}
+{com}.         
+.         svy: logit formal educ_yr age exp female infra_kab
+{res}{txt}(running {bf:logit} on estimation sample)
+{res}
+{txt}note: {bf:exp} omitted because of collinearity.
+
+Survey: Logistic regression
+
+{col 1}{lalign 16:Number of strata}{col 17} = {res}{ralign 3:1}{txt}{col 51}{lalign 15:Number of obs}{col 66} = {res}{ralign 10:50,000}
+{txt}{col 1}{lalign 16:Number of PSUs}{col 17} = {res}{ralign 3:100}{txt}{col 51}{lalign 15:Population size}{col 66} = {res}{ralign 10:13,267,425}
+{txt}{col 51}{lalign 15:Design df}{col 66} = {res}{ralign 10:99}
+{txt}{col 51}{lalign 15:F({res:4}, {res:96})}{col 66} = {res}{ralign 10:1258.10}
+{txt}{col 51}{lalign 15:Prob > F}{col 66} = {res}{ralign 10:0.0000}
+
+{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26}  Linearized
+{col 1}      formal{col 14}{c |} Coefficient{col 26}  std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 5}educ_yr {c |}{col 14}{res}{space 2} .4101524{col 26}{space 2}   .00603{col 37}{space 1}   68.02{col 46}{space 3}0.000{col 54}{space 4} .3981876{col 67}{space 3} .4221173
+{txt}{space 9}age {c |}{col 14}{res}{space 2} .0021656{col 26}{space 2} .0008344{col 37}{space 1}    2.60{col 46}{space 3}0.011{col 54}{space 4} .0005099{col 67}{space 3} .0038212
+{txt}{space 9}exp {c |}{col 14}{res}{space 2}        0{col 26}{txt}  (omitted)
+{space 6}female {c |}{col 14}{res}{space 2}-.3584858{col 26}{space 2}  .020687{col 37}{space 1}  -17.33{col 46}{space 3}0.000{col 54}{space 4}-.3995332{col 67}{space 3}-.3174384
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2} .0226443{col 26}{space 2} .0013529{col 37}{space 1}   16.74{col 46}{space 3}0.000{col 54}{space 4} .0199597{col 67}{space 3} .0253288
+{txt}{space 7}_cons {c |}{col 14}{res}{space 2}-4.894914{col 26}{space 2} .1123653{col 37}{space 1}  -43.56{col 46}{space 3}0.000{col 54}{space 4}-5.117871{col 67}{space 3}-4.671957
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+
+{com}.         margins, dydx(*) post
+{res}
+{txt}Average marginal effects
+
+{col 1}{lalign 16:Number of strata}{col 9} = {res}{ralign 3:1}{txt}{col 51}{lalign 15:Number of obs}{col 66} = {res}{ralign 10:50,000}
+{txt}{col 1}{lalign 16:Number of PSUs}{col 9} = {res}{ralign 3:100}{txt}{col 51}{lalign 15:Population size}{col 66} = {res}{ralign 10:13,267,425}
+{txt}{col 1}Model VCE: {res:Linearized}{col 51}{lalign 15:Design df}{col 66} = {res}{ralign 10:99}
+
+{txt}{p2colset 1 13 13 2}{...}
+{p2col:Expression:}{res:Pr(formal), predict()}{p_end}
+{p2col:dy/dx wrt:}{res:educ_yr age exp female infra_kab}{p_end}
+{p2colreset}{...}
+
+{res}{txt}{hline 13}{c TT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{col 14}{c |}{col 26} Delta-method
+{col 14}{c |}      dy/dx{col 26}   std. err.{col 38}      t{col 46}   P>|t|{col 54}     [95% con{col 67}f. interval]
+{hline 13}{c +}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{space 5}educ_yr {c |}{col 14}{res}{space 2} .0778555{col 26}{space 2} .0008964{col 37}{space 1}   86.86{col 46}{space 3}0.000{col 54}{space 4} .0760769{col 67}{space 3}  .079634
+{txt}{space 9}age {c |}{col 14}{res}{space 2} .0004111{col 26}{space 2} .0001588{col 37}{space 1}    2.59{col 46}{space 3}0.011{col 54}{space 4} .0000961{col 67}{space 3} .0007261
+{txt}{space 9}exp {c |}{col 14}{res}{space 2}        0{col 26}{txt}  (omitted)
+{space 6}female {c |}{col 14}{res}{space 2} -.068048{col 26}{space 2} .0039054{col 37}{space 1}  -17.42{col 46}{space 3}0.000{col 54}{space 4}-.0757972{col 67}{space 3}-.0602989
+{txt}{space 3}infra_kab {c |}{col 14}{res}{space 2} .0042984{col 26}{space 2}  .000247{col 37}{space 1}   17.40{col 46}{space 3}0.000{col 54}{space 4} .0038082{col 67}{space 3} .0047885
+{txt}{hline 13}{c BT}{hline 11}{hline 11}{hline 9}{hline 8}{hline 13}{hline 12}
+{res}{txt}
+{com}.         estimates store svy_logit_ame
+{txt}
+{com}.         
+.         estimates table svy_probit_ame svy_logit_ame, b(%9.4f) se(%9.4f) title("Survey-Weighted Average Marginal Effects: Pekerja Formal (N=50.000)")
+{res}
+{txt}{p}Survey-Weighted Average Marginal Effects: Pekerja Formal (N=50.000)
+
+{hline 12}{c -}{c TT}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{ralign 12:Variable} {c |} {center 9:svy_pro~e} {space 1} {center 9:svy_log~e} {space 1}
+{hline 12}{c -}{c +}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{res}{txt}{space 5}educ_yr {c |}{res} {ralign 9:0.0778}{txt} {space 1}{res} {ralign 9:0.0779}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.0009}{txt} {space 1}{res} {ralign 9:0.0009}{txt} {space 1}
+{res}{txt}{space 9}age {c |}{res} {ralign 9:0.0004}{txt} {space 1}{res} {ralign 9:0.0004}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.0002}{txt} {space 1}{res} {ralign 9:0.0002}{txt} {space 1}
+{res}{txt}{space 9}exp {c |}{res} {ralign 9:(omitted)}{txt} {space 1}{res} {ralign 9:(omitted)}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:}{txt} {space 1}{res} {ralign 9:}{txt} {space 1}
+{res}{txt}{space 6}female {c |}{res} {ralign 9:-0.0683}{txt} {space 1}{res} {ralign 9:-0.0680}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.0039}{txt} {space 1}{res} {ralign 9:0.0039}{txt} {space 1}
+{res}{txt}{space 3}infra_kab {c |}{res} {ralign 9:0.0042}{txt} {space 1}{res} {ralign 9:0.0043}{txt} {space 1}
+{res}{txt}{space 12} {c |}{res} {ralign 9:0.0002}{txt} {space 1}{res} {ralign 9:0.0002}{txt} {space 1}
+{res}{txt}{hline 12}{c -}{c BT}{c -}{hline 9}{c -}{c -}{c -}{hline 9}{c -}{c -}
+{ralign 38:Legend: b/se}
+{res}{txt}
+{com}. 
+{txt}end of do-file
+
+{com}. log close
+      {txt}name:  {res}<unnamed>
+       {txt}log:  {res}E:\Stata_Mikro\Publish\Persamaan Simultan\Spasial Mikro.smcl
+  {txt}log type:  {res}smcl
+ {txt}closed on:  {res}24 Nov 2026, 22:26:01
+{txt}{.-}
+{smcl}
+{txt}{sf}{ul off}
